@@ -30,6 +30,7 @@ import urllib.request
 import zlib
 from datetime import datetime, timezone
 
+SCHEMA = 2   # 2 added the per-camera "dir" field
 USER_AGENT = "radar-tiles/0.1 (+https://github.com/zhyph/radar-tiles)"
 # When one relation lists several values (traffic_signals;maxspeed), the first match wins.
 KIND_PRIORITY = (("maxspeed", "SPEED"), ("average_speed", "AVERAGE"), ("traffic_signals", "RED_LIGHT"))
@@ -84,21 +85,41 @@ def collect(path, cameras):
         for n in proc:
             if n.location.valid():
                 kind, speed, mph = devices[n.id]
-                cameras[n.id] = camera(n.id, n.location.lat, n.location.lon, speed, mph, kind)
+                cameras[n.id] = camera(n.id, n.location.lat, n.location.lon, speed, mph, kind, n.tags.get("direction"))
 
     # Plain speed-camera nodes; a relation's richer info (kind, maxspeed) wins if both exist.
     proc = osmium.FileProcessor(path, osmium.osm.NODE).with_filter(osmium.filter.KeyFilter("highway"))
     for n in proc:
         if n.tags.get("highway") == "speed_camera" and n.id not in cameras and n.location.valid():
             speed, mph = parse_maxspeed(n.tags.get("maxspeed"))
-            cameras[n.id] = camera(n.id, n.location.lat, n.location.lon, speed, mph, "SPEED")
+            cameras[n.id] = camera(n.id, n.location.lat, n.location.lon, speed, mph, "SPEED", n.tags.get("direction"))
 
     header = osmium.FileProcessor(path).header
     return header.get("osmosis_replication_timestamp") or header.get("timestamp") or ""
 
 
-def camera(node_id, lat, lon, speed, mph, kind):
-    return {"id": node_id, "lat": round(lat, 6), "lon": round(lon, 6), "max": speed, "mph": mph, "kind": kind}
+COMPASS = "N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW".split()
+
+
+def parse_facing(value):
+    """OSM direction=* as degrees the camera faces, or None unless it is a plain cardinal value
+    (both/forward/backward/ranges are relative or ambiguous and mean 'no usable direction')."""
+    v = (value or "").strip().upper()
+    if v in COMPASS:
+        return round(COMPASS.index(v) * 22.5) % 360
+    try:
+        d = float(v)
+    except ValueError:
+        return None
+    return round(d) % 360 if 0 <= d < 360 else None
+
+
+def camera(node_id, lat, lon, speed, mph, kind, direction=None):
+    c = {"id": node_id, "lat": round(lat, 6), "lon": round(lon, 6), "max": speed, "mph": mph, "kind": kind}
+    facing = parse_facing(direction)
+    if facing is not None:
+        c["dir"] = facing
+    return c
 
 
 # ---- Geofabrik regions --------------------------------------------------------------------
@@ -163,7 +184,10 @@ def fresh_enough(root, state_json):
     Age is the OSM data timestamp, not the file date. The limit is 10-19 days, fixed per region
     by a hash, so regions do not all come due in the same weekly run."""
     try:
-        stamp = json.load(open(state_json))["osm"]
+        saved = json.load(open(state_json))
+        if saved.get("schema", 1) < SCHEMA:   # older layout (e.g. no direction field): rebuild once
+            return False
+        stamp = saved["osm"]
         data_time = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
     except (OSError, ValueError, KeyError):
         return False
@@ -200,7 +224,7 @@ def cmd_region(root, index, out_json, only=""):
 
 def save_cameras(path, cameras, osm_timestamp):
     with open(path, "w") as f:
-        json.dump({"osm": osm_timestamp, "cameras": list(cameras.values())}, f, separators=(",", ":"))
+        json.dump({"schema": SCHEMA, "osm": osm_timestamp, "cameras": list(cameras.values())}, f, separators=(",", ":"))
     print(f"saved {len(cameras)} cameras to {path}", file=sys.stderr)
 
 
