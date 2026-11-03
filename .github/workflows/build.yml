@@ -9,6 +9,10 @@ on:
         description: "Only process Geofabrik extracts whose id contains this text (testing, e.g. berlin)"
         required: false
         default: ""
+      force:
+        description: "Rebuild every region even if its saved data is still fresh"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -52,9 +56,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install osmium
-      - name: Collect cameras of every extract in this region
+      - name: Load the previous results (branch "state", absent on the first run)
+        run: git clone --depth 1 --branch state "https://github.com/${{ github.repository }}" state || mkdir state
+      - name: Collect cameras of every extract in this region (skipped while fresh)
         env:
           ONLY: ${{ inputs.only }}
+          STATE_DIR: state
+          FORCE: ${{ inputs.force && '1' || '' }}
         run: |
           curl -fsSL -A "$USER_AGENT" -o index.json "$GEOFABRIK_INDEX"
           python build_tiles.py region "${{ matrix.root }}" index.json "cameras-${{ matrix.root }}.json" "$ONLY"
@@ -70,6 +78,7 @@ jobs:
     permissions:
       pages: write
       id-token: write
+      contents: write   # to save the per-region results on the "state" branch
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -86,6 +95,13 @@ jobs:
       - run: |
           python build_tiles.py tiles site parts/*.json
           cp site-static/index.html site/index.html
+      - name: Save per-region results for the next run
+        if: inputs.only == ''
+        run: |
+          mkdir state-out && cp parts/*.json state-out/ && cd state-out
+          git init -q -b state && git add . 
+          git -c user.name=radar-tiles -c user.email=radar-tiles@users.noreply.github.com commit -q -m "state $(date -u +%F)"
+          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" state
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site

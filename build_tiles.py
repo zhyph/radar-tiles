@@ -27,6 +27,8 @@ import sys
 import tempfile
 import time
 import urllib.request
+import zlib
+from datetime import datetime, timezone
 
 USER_AGENT = "radar-tiles/0.1 (+https://github.com/zhyph/radar-tiles)"
 # When one relation lists several values (traffic_signals;maxspeed), the first match wins.
@@ -156,7 +158,27 @@ def roots_with_extracts(index, only):
     return {top(i) for i, _ in leaf_extracts(index, only=only)}
 
 
+def fresh_enough(root, state_json):
+    """True when a previous result for this region is recent enough to reuse (no downloads).
+    Age is the OSM data timestamp, not the file date. The limit is 10-19 days, fixed per region
+    by a hash, so regions do not all come due in the same weekly run."""
+    try:
+        stamp = json.load(open(state_json))["osm"]
+        data_time = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except (OSError, ValueError, KeyError):
+        return False
+    limit_days = 10 + zlib.crc32(root.encode()) % 10
+    return (datetime.now(timezone.utc) - data_time).days < limit_days
+
+
 def cmd_region(root, index, out_json, only=""):
+    # STATE_DIR holds the previous run's per-region results; FORCE=1 ignores them.
+    state_json = os.path.join(os.environ.get("STATE_DIR", ""), os.path.basename(out_json))
+    if os.environ.get("STATE_DIR") and not only and not os.environ.get("FORCE") \
+            and fresh_enough(root, state_json):
+        shutil.copyfile(state_json, out_json)
+        print(f"{root}: previous data is still fresh, nothing downloaded", file=sys.stderr)
+        return
     cameras, newest = {}, ""
     tmp = tempfile.mkdtemp(prefix="extract-")
     extracts = leaf_extracts(index, root, only)
