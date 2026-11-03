@@ -1,0 +1,93 @@
+name: Build camera tiles
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"   # weekly, Mondays 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Only process Geofabrik extracts whose id contains this text (testing, e.g. berlin)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-tiles
+  cancel-in-progress: false
+
+env:
+  GEOFABRIK_INDEX: https://download.geofabrik.de/index-v1-nogeom.json
+  USER_AGENT: "radar-tiles/0.1 (+https://github.com/zhyph/radar-tiles)"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      roots: ${{ steps.plan.outputs.roots }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - id: plan
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          curl -fsSL -A "$USER_AGENT" -o index.json "$GEOFABRIK_INDEX"
+          echo "roots=$(python build_tiles.py plan index.json "$ONLY")" >> "$GITHUB_OUTPUT"
+
+  collect:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJSON(needs.plan.outputs.roots) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install osmium
+      - name: Collect cameras of every extract in this region
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          curl -fsSL -A "$USER_AGENT" -o index.json "$GEOFABRIK_INDEX"
+          python build_tiles.py region "${{ matrix.root }}" index.json "cameras-${{ matrix.root }}.json" "$ONLY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cameras-${{ matrix.root }}
+          path: cameras-${{ matrix.root }}.json
+          retention-days: 3
+
+  publish:
+    needs: collect   # runs only if every region succeeded, so a partial dataset is never published
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cameras-*
+          merge-multiple: true
+          path: parts
+      - run: |
+          python build_tiles.py tiles site parts/*.json
+          cp site-static/index.html site/index.html
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v5
