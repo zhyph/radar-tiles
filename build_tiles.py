@@ -245,31 +245,6 @@ def write_tiles(cameras, out_dir, osm_timestamp):
     return len(tiles)
 
 
-EXTRAS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extra", "cameras.json")
-EXTRA_DEDUPE_M = 100
-
-
-def merge_extras(cameras, path=EXTRAS):
-    """Adds hand-maintained cameras missing from OSM (extra/cameras.json). An entry within
-    EXTRA_DEDUPE_M of an OSM camera is dropped, so it disappears once someone maps it."""
-    if not os.path.exists(path):
-        return 0
-    added = 0
-    for e in json.load(open(path)):
-        near = any(math.hypot((c["lat"] - e["lat"]) * 111_000,
-                              (c["lon"] - e["lon"]) * 111_000 * math.cos(math.radians(e["lat"]))) <= EXTRA_DEDUPE_M
-                   for c in cameras.values())
-        if near:
-            continue
-        # Negative ids cannot clash with OSM ids; derived from the position so they stay stable.
-        cid = -(zlib.crc32(f"{e['lat']},{e['lon']}".encode()) + 1)
-        c = camera(cid, e["lat"], e["lon"], e.get("max", 0), e.get("mph", False), e.get("kind", "SPEED"),
-                   e.get("direction"))
-        cameras[cid] = c
-        added += 1
-    return added
-
-
 def cmd_tiles(out_dir, inputs):
     cameras, newest = {}, ""
     for path in inputs:
@@ -279,7 +254,6 @@ def cmd_tiles(out_dir, inputs):
             cameras.setdefault(c["id"], c)  # extracts overlap slightly at borders
     if not cameras:
         sys.exit("no cameras found; refusing to publish an empty dataset")
-    print(f"{merge_extras(cameras)} extra cameras added", file=sys.stderr)
     n = write_tiles(cameras, out_dir, newest)
     print(f"wrote {n} tiles, {len(cameras)} cameras to {out_dir}", file=sys.stderr)
 
