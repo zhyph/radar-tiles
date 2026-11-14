@@ -11,6 +11,9 @@ does not depend on the (free, fair-use) public Overpass servers being up.
 1. **plan**: reads Geofabrik's extract index and lists the world regions.
 2. **collect** (one job per region): downloads each Geofabrik extract of the region one at a time,
    reads the cameras with `pyosmium`, deletes the extract, and uploads the camera list.
+   A region whose last result is still fresh (10 to 19 days old, set per region by a hash so they do
+   not all come due together) is reused from the `state` branch with no download. Run the workflow
+   with `force` to rebuild everything. A change to `SCHEMA` in `build_tiles.py` also forces a rebuild.
 3. **publish**: merges the lists, writes the tiles and deploys them to GitHub Pages. It only runs if
    every region succeeded, so a partial dataset is never published and the previous one stays up.
 
@@ -29,7 +32,11 @@ the kind and the `maxspeed`). See the OSM wiki pages for `highway=speed_camera` 
   {"id": 123, "lat": 52.62012, "lon": 13.249668, "max": 60, "mph": false, "kind": "SPEED"}]}
 ```
 
-`kind` is `SPEED`, `RED_LIGHT` or `AVERAGE`; `max` is 0 when unknown.
+`kind` is `SPEED`, `RED_LIGHT` or `AVERAGE`; `max` is 0 when unknown. An optional `dir` (0-359) is the
+compass direction the camera faces, from the OSM `direction` tag when it is a plain cardinal value
+(`both`, `forward`, `backward` and ranges are left out).
+
+The `state` branch holds the per-region results of the last full run (single commit, force-pushed).
 
 ## Run locally
 
