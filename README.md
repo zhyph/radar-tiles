@@ -8,14 +8,16 @@ does not depend on the (free, fair-use) public Overpass servers being up.
 
 `.github/workflows/build.yml` runs weekly (and on demand):
 
-1. **plan**: reads Geofabrik's extract index and lists the world regions.
+1. **plan**: reads Geofabrik's extract index and lists the jobs: one per region, split into shards of about 30 extracts for the big regions (a runner job is capped at 6 hours).
 2. **collect** (one job per region): downloads each Geofabrik extract of the region one at a time,
    reads the cameras with `pyosmium`, deletes the extract, and uploads the camera list.
    A region whose last result is still fresh (10 to 19 days old, set per region by a hash so they do
    not all come due together) is reused from the `state` branch with no download. Run the workflow
    with `force` to rebuild everything. A change to `SCHEMA` in `build_tiles.py` also forces a rebuild.
 3. **publish**: merges the lists, writes the tiles and deploys them to GitHub Pages. It only runs if
-   every region succeeded, so a partial dataset is never published and the previous one stays up.
+   every job succeeded, so a partial dataset is never published and the previous one stays up.
+4. **save-state**: runs even if some jobs failed and saves every finished job's result on the
+   `state` branch, so a retry only redoes the jobs that failed.
 
 A camera is a node tagged `highway=speed_camera`, or a `device` member of a `type=enforcement`
 relation with `enforcement=maxspeed`, `traffic_signals` or `average_speed` (the relation supplies

@@ -2,7 +2,7 @@
 """Builds camera tiles from OpenStreetMap extracts (Geofabrik), for the Radar Alert app.
 
 Subcommands
-  plan INDEX [ONLY]                     print the JSON list of regions to process
+  plan INDEX [ONLY]                     print the JSON list of jobs (regions, split into shards)
   region ROOT INDEX OUT.json [ONLY]     download every extract under ROOT one at a time,
                                         collect its cameras, delete it; write OUT.json
   collect OUT.json PBF...               collect cameras from local .osm.pbf files
@@ -163,8 +163,17 @@ def download(url, dest, attempts=3):
             time.sleep(30 * attempt)
 
 
+EXTRACTS_PER_SHARD = 30   # a runner job is capped at 6 h; the biggest regions need splitting
+
+
 def cmd_plan(index, only=""):
-    print(json.dumps(sorted(roots_with_extracts(index, only))))
+    """JSON list of jobs: one per region, or several shards (every n-th extract) for big regions."""
+    jobs = []
+    for root in sorted(roots_with_extracts(index, only)):
+        n = -(-len(leaf_extracts(index, root, only)) // EXTRACTS_PER_SHARD)
+        for i in range(n):
+            jobs.append({"root": root, "shard": i, "shards": n, "id": f"{root}-{i + 1}of{n}"})
+    print(json.dumps(jobs))
 
 
 def roots_with_extracts(index, only):
@@ -206,7 +215,9 @@ def cmd_region(root, index, out_json, only=""):
     cameras, newest = {}, ""
     tmp = tempfile.mkdtemp(prefix="extract-")
     extracts = leaf_extracts(index, root, only)
-    print(f"{root}: {len(extracts)} extracts", file=sys.stderr)
+    shard, shards = (int(x) for x in os.environ.get("SHARD", "0/1").split("/"))
+    extracts = extracts[shard::shards]   # round-robin, so big and small extracts mix evenly
+    print(f"{root} shard {shard + 1}/{shards}: {len(extracts)} extracts", file=sys.stderr)
     for i, (name, url) in enumerate(extracts, 1):
         path = os.path.join(tmp, name.replace("/", "_") + ".osm.pbf")
         print(f"[{i}/{len(extracts)}] {name}", file=sys.stderr)
